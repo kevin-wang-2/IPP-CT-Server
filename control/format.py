@@ -1,4 +1,5 @@
 from ctypes import *
+import struct
 
 
 class ValidationError(Exception):
@@ -16,6 +17,10 @@ class ObjectId(c_uint8 * 12):
     @classmethod
     def from_array(cls, arr):
         return ObjectId(*arr)
+
+    @classmethod
+    def from_str(cls, s):
+        return cls.from_number(int(s, 16))
 
     def to_number(self):
         result = 0
@@ -81,6 +86,16 @@ def create_structure(fields, init=None, verification=None):
     return S
 
 
+def encode_double_array(arr, dimension=1):
+    if dimension == 1:
+        return struct.pack(">" + str(len(arr)) + "d", *arr)
+    else:
+        result = b""
+        for i in arr:
+            result += encode_double_array(i, dimension - 1)
+        return result
+
+
 WelcomeCmd = create_structure([
     ("ucType", c_uint8),
     ("", c_uint8 * 3),
@@ -91,21 +106,22 @@ WelcomeCmd = create_structure([
     ("nTimeStamp", c_uint32),
     ("nValidation", c_uint32)
 ], {
-    "ucType": 1
+    "ucType": 0xff
 },
     "nValidation")
 
 TaskCmd = create_structure([
     ("ucType", c_uint8),
-    ("", c_uint8 * 3),
+    ("ucEnd", c_uint8),
+    ("", c_uint8 * 2),
     ("_drone", ObjectId),
     ("_task", ObjectId),
-    ("ucType", c_uint8),
+    ("ucTaskType", c_uint8),
     ("reserved", c_uint8),
     ("nLen", c_short),
     ("nValidation", c_uint32)
 ], {
-    "ucType": 2
+    "ucType": 0
 },
     "nValidation")
 
@@ -114,14 +130,15 @@ ReplyCmd = create_structure([
     ("", c_uint8 * 3),
     ("_drone", ObjectId),
     ("_task", ObjectId),
-    ("ucPos", c_uint8 * 3),
-    ("ucSpd", c_uint8 * 3),
+    ("dPos", c_double * 3),
+    ("dSpd", c_double * 3),
     ("ucBatteryH", c_uint8),
     ("ucBatteryL", c_uint8),
+    ("", c_uint8 * 2),
     ("ucTimeStamp", c_uint32),
     ("nValidation", c_uint32)
 ], {
-    "ucType": 3
+    "ucType": 0xfe
 },
     "nValidation")
 
@@ -133,3 +150,4 @@ if __name__ == "__main__":
     welcomeCmd.nTimeStamp = 31
     print(welcomeCmd.encode())
     print(hex(ObjectId.from_array(welcomeCmd.decode(welcomeCmd.encode())._drone).to_number()))
+    print(encode_double_array([[1, 2, 3], [4, 5, 6]], 2))
