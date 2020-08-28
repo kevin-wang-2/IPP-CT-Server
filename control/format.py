@@ -45,6 +45,8 @@ class BigEndianEncoding(BigEndianStructure):
                 val = eval("self." + key[0])
                 if type(val) == c_uint8 * 12:
                     total += sum(val)
+                elif hasattr(val, "__getitem__"):
+                    total += int(sum(val))
                 else:
                     total += val
             self.__setattr__(self._validation_, (~(total & 0x7f) + 1) & 0x7f)
@@ -62,6 +64,8 @@ class BigEndianEncoding(BigEndianStructure):
                 val = eval("self." + key[0])
                 if type(val) == c_uint8 * 12:
                     total += sum(val)
+                elif hasattr(val, "__getitem__"):
+                    total += int(sum(val))
                 else:
                     total += val
             if total & 0x7f != 0:

@@ -4,7 +4,7 @@ from bson.dbref import DBRef
 import json
 import socket
 import function.hardware
-import function.control
+import control
 
 
 def get_host_ip():
@@ -100,9 +100,9 @@ def setup():
 
     # 初始化控制服务器
     try:
-        control = function.control.Control(config, garage_id)
+        control_instance = control.Control(config, garage_id)
     except Exception as e:
         print("Fail to initialize Control Tower")
         raise e
 
-    return config, hardware, control
+    return config, hardware, control_instance
