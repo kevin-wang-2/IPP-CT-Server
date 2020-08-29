@@ -34,60 +34,199 @@ class ObjectId(c_uint8 * 12):
 
 
 class BigEndianEncoding(BigEndianStructure):
+    _pack_ = 1
     _validation_ = None
 
     def encode(self):
         if self._validation_ is not None:
-            total = 0
-            for key in self._fields_:
-                if key[0] == self._validation_ or key[0] == "":
-                    continue
-                val = eval("self." + key[0])
-                if type(val) == c_uint8 * 12:
-                    total += sum(val)
-                elif hasattr(val, "__getitem__"):
-                    total += int(sum(val))
-                else:
-                    total += val
-            self.__setattr__(self._validation_, (~(total & 0x7f) + 1) & 0x7f)
+            self.__setattr__(self._validation_, 0)
+            partial = sum(struct.iter_unpack(">I", string_at(addressof(self), sizeof(self))))
+            self.__setattr__(self._validation_, (~(partial & 0x7f) + 1) & 0x7f)
         return string_at(addressof(self), sizeof(self))
 
     @classmethod
     def decode(cls, data):
         self = cls()
         memmove(addressof(self), data, sizeof(self))
-        if self._validation_ is not None:
-            total = 0
-            for key in self._fields_:
-                if key[0] == "":
-                    continue
-                val = eval("self." + key[0])
-                if type(val) == c_uint8 * 12:
-                    total += sum(val)
-                elif hasattr(val, "__getitem__"):
-                    total += int(sum(val))
-                else:
-                    total += val
-            if total & 0x7f != 0:
-                raise ValidationError
+        if self._validation_ is not None and sum(struct.iter_unpack(">I", data)) & 0x7f != 0:
+            raise ValidationError
         return self
 
 
-def create_structure(fields, init=None, verification=None):
-    if init is None:
-        init = {}
+class PackageHead(BigEndianEncoding):
+    _fields_ = [
+        ("ucBegin", c_uint8),
+        ("ucType", c_uint8),
+        ("ucChunked", c_uint8),
+        ("", c_uint8),
+        ("nPackLen", c_uint32)
+    ]
 
-    class S(BigEndianEncoding):
-        _pack_ = 1
-        _fields_ = fields
-        _validation_ = verification
+    def __init__(self):
+        super(PackageHead, self).__init__()
+        self.ucBegin = 0x00
 
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            for key in init.keys():
-                self.__setattr__(key, init[key])
 
-    return S
+class PackageTail(BigEndianEncoding):
+    _fields_ = [
+        ("ucValidation", c_uint8),
+        ("", c_uint8),
+        ("", c_uint8),
+        ("ucEnd", c_uint8)
+    ]
+
+    def __init__(self):
+        super(PackageTail, self).__init__()
+        self.ucEnd = 0x01
+
+
+class WelcomeCmdBody(BigEndianEncoding):
+    _fields_ = [
+        ("controller", ObjectId),
+        ("ucReconnect", c_uint8),
+        ("", c_uint8 * 3)
+    ]
+
+
+class TaskCmdBody(BigEndianEncoding):
+    _fields_ = [
+        ("task", ObjectId),
+        ("ucTaskType", c_uint8),
+        ("", c_uint8),
+        ("nLen", c_ushort)
+    ]
+
+
+class WelcomeMsgBody(BigEndianEncoding):
+    _fields_ = [
+        ("drone", ObjectId),
+        ("ucBatteryH", c_uint8),
+        ("ucBatteryL", c_uint8),
+        ("", c_uint8 * 2),
+        ("ucTimeStamp", c_uint32)
+    ]
+
+
+class StatusMsgBody(BigEndianEncoding):
+    _fields_ = [
+        ("drone", ObjectId),
+        ("dPos", c_double * 3),
+        ("dSpd", c_double * 3),
+        ("ucBatteryH", c_uint8),
+        ("ucBatteryL", c_uint8),
+        ("", c_uint8 * 2),
+        ("ucTimeStamp", c_uint32)
+    ]
+
+
+class ExitMsgBody(BigEndianEncoding):
+    _fields_ = [
+        ("ucReason", c_uint8),
+        ("", c_uint8 * 3)
+    ]
+
+
+PACKAGE_WELCOME_CMD = 0x00
+PACKAGE_TASK_CMD = 0x01
+PACKAGE_RESET_CMD = 0x02
+PACKAGE_WELCOME_MSG = 0xff
+PACKAGE_STATUS_MSG = 0xfe
+PACKAGE_EXIT_MSG = 0xfd
+body_table = {
+    PACKAGE_WELCOME_CMD: WelcomeCmdBody,
+    PACKAGE_TASK_CMD: TaskCmdBody,
+    PACKAGE_WELCOME_MSG: WelcomeMsgBody,
+    PACKAGE_STATUS_MSG: StatusMsgBody,
+    PACKAGE_EXIT_MSG: ExitMsgBody
+}
+size_table = {
+    PACKAGE_WELCOME_CMD: WelcomeCmdBody,
+    PACKAGE_TASK_CMD: TaskCmdBody,
+    PACKAGE_WELCOME_MSG: WelcomeMsgBody,
+    PACKAGE_STATUS_MSG: StatusMsgBody,
+    PACKAGE_EXIT_MSG: ExitMsgBody
+}
+
+
+class Package:
+    _head = PackageHead()
+    _body = {}
+    _extra = []
+    _tail = PackageTail()
+
+    def __init__(self, package_type=0):
+        self._head.ucType = package_type
+        self._type = package_type
+        if package_type in body_table:
+            self._body = body_table[package_type]()
+
+    @property
+    def type(self):
+        return self._type
+
+    def __getattr__(self, item):
+        if item == "content":
+            return self._extra
+        elif hasattr(self._body, item):
+            return eval("self._body." + item)
+        elif hasattr(self._head, item):
+            return eval("self._head." + item)
+        return eval("self._tail." + item)
+
+    def __setattr__(self, key, value):
+        if key == "content":
+            self._extra = value
+        elif hasattr(self._body, key):
+            self._body.__setattr__(key, value)
+        elif hasattr(self._head, key):
+            self._head.__setattr__(key, value)
+        elif hasattr(self._tail, key):
+            self._tail.__setattr__(key, value)
+        else:
+            object.__setattr__(self, key, value)
+
+    def encode(self):
+        self._tail.ucValidation = 0
+        self._head.nPackLen = sizeof(self._head) + \
+                              sizeof(self._body) + \
+                              sum([len(i) for i in self._extra]) * 8 + \
+                              sizeof(self._tail)
+        temp = self._head.encode() + (self._body.encode() if self._body else b"") + \
+               (encode_double_array(self._extra, 2) if len(self._extra) else b"") + \
+               self._tail.encode()
+        partial = sum(i[0] for i in struct.iter_unpack(">B", temp))
+        self._tail.ucValidation = (~(partial & 0x7f) + 1) & 0x7f
+        return self._head.encode() + (self._body.encode() if self._body else b"") + \
+               (encode_double_array(self._extra, 2) if len(self._extra) else b"") + \
+               self._tail.encode()
+
+    @classmethod
+    def read(cls, sock):
+        """
+        :param socket.socket sock:
+        :return:
+        """
+        self = cls()
+        full_text = ""
+        header = sock.recv(8)
+        full_text += header
+        self._head = PackageHead.decode(header)
+        if self._head.ucBegin != 0:
+            raise ValidationError
+        if self._head.ucType in body_table:
+            body = sock.recv(self._head.nPackLen - 12)
+            full_text += body
+            self._body = body_table[self._head.ucType].decode(body)
+            if self._head.ucType == 0x01:
+                self._extra = decode_position_array(body[16:])
+        tail = sock.recv(4)
+        full_text += tail
+        self._tail = PackageTail.decode(tail)
+        if sum(struct.iter_unpack(">I", full_text)) & 0x7f != 0:
+            raise ValidationError
+        if self._tail.ucEnd != 0x01:
+            raise ValidationError
+        return self
 
 
 def encode_double_array(arr, dimension=1):
@@ -103,61 +242,11 @@ def encode_double_array(arr, dimension=1):
 def decode_position_array(buffer):
     return [
         item for item in struct.iter_unpack(">ddd", buffer)
-        ]
+    ]
 
-
-WelcomeCmd = create_structure([
-    ("ucType", c_uint8),
-    ("", c_uint8 * 3),
-    ("_drone", ObjectId),
-    ("ucBatteryH", c_uint8),
-    ("ucBatteryL", c_uint8),
-    ("", c_uint16),
-    ("nTimeStamp", c_uint32),
-    ("nValidation", c_uint32)
-], {
-    "ucType": 0xff
-},
-    "nValidation")
-
-TaskCmd = create_structure([
-    ("ucType", c_uint8),
-    ("ucEnd", c_uint8),
-    ("", c_uint8 * 2),
-    ("_drone", ObjectId),
-    ("_task", ObjectId),
-    ("ucTaskType", c_uint8),
-    ("reserved", c_uint8),
-    ("nLen", c_short),
-    ("nValidation", c_uint32)
-], {
-    "ucType": 0
-},
-    "nValidation")
-
-ReplyCmd = create_structure([
-    ("ucType", c_uint8),
-    ("", c_uint8 * 3),
-    ("_drone", ObjectId),
-    ("_task", ObjectId),
-    ("dPos", c_double * 3),
-    ("dSpd", c_double * 3),
-    ("ucBatteryH", c_uint8),
-    ("ucBatteryL", c_uint8),
-    ("", c_uint8 * 2),
-    ("nTimeStamp", c_uint32),
-    ("nValidation", c_uint32)
-], {
-    "ucType": 0xfe
-},
-    "nValidation")
 
 if __name__ == "__main__":
-    welcomeCmd = WelcomeCmd()
-    welcomeCmd._drone = ObjectId.from_number(0x5f38a921b2e1fb5c98a89b98)
-    welcomeCmd.ucBatteryH = 0x64
-    welcomeCmd.ucBatteryL = 0x00
-    welcomeCmd.nTimeStamp = 31
-    print(welcomeCmd.encode())
-    print(hex(ObjectId.from_array(welcomeCmd.decode(welcomeCmd.encode())._drone).to_number()))
-    print(encode_double_array([[1, 2, 3], [4, 5, 6]], 2))
+    cmd = Package(PACKAGE_WELCOME_CMD)
+    cmd.controller = ObjectId.from_number(0x5f38a917b2e1fb5c98a89b97)
+    cmd.ucReconnect = 0x1
+    print(cmd.encode())
