@@ -40,7 +40,7 @@ class BigEndianEncoding(BigEndianStructure):
     def encode(self):
         if self._validation_ is not None:
             self.__setattr__(self._validation_, 0)
-            partial = sum(struct.iter_unpack(">I", string_at(addressof(self), sizeof(self))))
+            partial = sum(i[0] for i in struct.iter_unpack(">B", string_at(addressof(self), sizeof(self))))
             self.__setattr__(self._validation_, (~(partial & 0x7f) + 1) & 0x7f)
         return string_at(addressof(self), sizeof(self))
 
@@ -48,7 +48,7 @@ class BigEndianEncoding(BigEndianStructure):
     def decode(cls, data):
         self = cls()
         memmove(addressof(self), data, sizeof(self))
-        if self._validation_ is not None and sum(struct.iter_unpack(">I", data)) & 0x7f != 0:
+        if self._validation_ is not None and sum(i[0] for i in struct.iter_unpack(">B", data)) & 0x7f != 0:
             raise ValidationError
         return self
 
@@ -109,13 +109,17 @@ class WelcomeMsgBody(BigEndianEncoding):
 
 class StatusMsgBody(BigEndianEncoding):
     _fields_ = [
-        ("drone", ObjectId),
-        ("dPos", c_double * 3),
-        ("dSpd", c_double * 3),
+        ("task", ObjectId),
+        ("dPosX", c_double),
+        ("dPosY", c_double),
+        ("dPosZ", c_double),
+        ("dSpdX", c_double),
+        ("dSpdY", c_double),
+        ("dSpdZ", c_double),
         ("ucBatteryH", c_uint8),
         ("ucBatteryL", c_uint8),
         ("", c_uint8 * 2),
-        ("ucTimeStamp", c_uint32)
+        ("nTimeStamp", c_uint32)
     ]
 
 
@@ -196,6 +200,9 @@ class Package:
                self._tail.encode()
         partial = sum(i[0] for i in struct.iter_unpack(">B", temp))
         self._tail.ucValidation = (~(partial & 0x7f) + 1) & 0x7f
+        tt = self._head.encode() + (self._body.encode() if self._body else b"") + \
+               (encode_double_array(self._extra, 2) if len(self._extra) else b"") + \
+               self._tail.encode()
         return self._head.encode() + (self._body.encode() if self._body else b"") + \
                (encode_double_array(self._extra, 2) if len(self._extra) else b"") + \
                self._tail.encode()
@@ -207,7 +214,7 @@ class Package:
         :return:
         """
         self = cls()
-        full_text = ""
+        full_text = b""
         header = sock.recv(8)
         full_text += header
         self._head = PackageHead.decode(header)
@@ -222,7 +229,7 @@ class Package:
         tail = sock.recv(4)
         full_text += tail
         self._tail = PackageTail.decode(tail)
-        if sum(struct.iter_unpack(">I", full_text)) & 0x7f != 0:
+        if sum(i[0] for i in struct.iter_unpack(">B", full_text)) & 0x7f != 0:
             raise ValidationError
         if self._tail.ucEnd != 0x01:
             raise ValidationError
@@ -243,6 +250,13 @@ def decode_position_array(buffer):
     return [
         item for item in struct.iter_unpack(">ddd", buffer)
     ]
+
+
+def generate_package(package_type, **kwargs):
+    pack = Package(package_type)
+    for key in kwargs:
+        pack.__setattr__(key, kwargs[key])
+    return pack.encode()
 
 
 if __name__ == "__main__":

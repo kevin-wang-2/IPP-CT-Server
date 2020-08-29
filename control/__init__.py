@@ -39,22 +39,19 @@ class Control:
                 get_welcomed = False
                 while not get_welcomed:
                     try:
-                        welcome = client.recv(1024)
+                        welcome_msg = control.format.Package.read(client)
                         get_welcomed = True
+                    except BlockingIOError as e:
+                        continue
                     except socket.timeout as e:
                         client.close()
                         logger.warning("%s:%d - Time out" % (addr[0], addr[1]))
                         break
-                    except BlockingIOError as e:
-                        continue
+                    except control.format.ValidationError as e:
+                        logger.warning("%s:%d - Validation Error" % (addr[0], addr[1]))
+                        client.close()
+                        break
                 if not get_welcomed:
-                    continue
-
-                try:
-                    welcome_msg = control.format.WelcomeCmd.decode(welcome)
-                except control.format.ValidationError as e:
-                    logger.warning("%s:%d - Validation Error" % (addr[0], addr[1]))
-                    client.close()
                     continue
 
                 if welcome_msg.ucType != 0xff:
@@ -62,13 +59,13 @@ class Control:
                     client.close()
                     continue
 
-                if control.format.ObjectId.from_array(welcome_msg._drone).to_string() in _config["control"]["drones"]:
+                if control.format.ObjectId.from_array(welcome_msg.drone).to_string() in _config["control"]["drones"]:
                     process = ControlProcess(config, self.garage_id,
-                                             control.format.ObjectId.from_array(welcome_msg._drone).to_string(), client)
+                                             control.format.ObjectId.from_array(welcome_msg.drone).to_string(), client)
                     process.start()
                 else:
                     logger.warning("%s:%d - %s Not in drone list" % (addr[0], addr[1],
-                                                                     control.format.ObjectId.from_array(welcome_msg._drone).to_string()))
+                                                                     control.format.ObjectId.from_array(welcome_msg.drone).to_string()))
                     client.close()
 
         return listen()

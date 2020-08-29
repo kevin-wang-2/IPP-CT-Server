@@ -40,39 +40,32 @@ class ControlStateMachine:
         :param bool end:
         :return: None
         """
-        command = control.format.TaskCmd()
-        command.ucEnd = end
-        command._drone = control.format.ObjectId.from_str(self.parent.drone_id)
-        command._task = control.format.ObjectId.from_str(str(task["_id"]))
-        command.ucTaskType = {
-            "idle": 0x00,
-            "load": 0x01,
-            "mission": 0x03,
-            "unload": 0x07
-        }[task["type"]]
-        command.nLen = len(task["waypoint"]) if "waypoint" in task else 0
-        while self.sock_send(command.encode()) is None and self.parent.open:
+        package = control.format.generate_package(control.format.PACKAGE_TASK_CMD,
+                                                  ucChunked=0 if end else 1,
+                                                  task=control.format.ObjectId.from_str(str(task["_id"])),
+                                                  ucTaskType={
+                                                      "idle": 0x00,
+                                                      "load": 0x01,
+                                                      "mission": 0x03,
+                                                      "unload": 0x07
+                                                  }[task["type"]],
+                                                  nLen=len(task["waypoint"]) if "waypoint" in task else 0,
+                                                  content=task["waypoint"] if "waypoint" in task else [])
+        while self.sock_send(package) is None and self.parent.open:
             pass
-        if command.nLen > 0:
-            while self.sock_send(control.format.encode_double_array(task["waypoint"], 2)) is None and self.parent.open:
-                pass
 
     def parse_reply(self):
         """
         解析飞机回复
         :return:
         """
-        buffer = self.sock_recv()
-        if buffer is None:
-            return None
+        reply = control.format.Package.read(self.parent.socket)
 
-        try:
-            reply = control.format.ReplyCmd.decode(buffer)
-        except control.format.ValidationError as e:
-            self.error_logic()
-            return None
-
-        if reply.ucType == 0xfc:  # 退出状态
+        if reply.ucType == 0xfd:  # 退出状态
+            if reply.ucReason == 0x00:
+                logger.info("Drone %s shut down" % (self.parent.drone_id, ))
+            else:
+                logger.error("Drone %s emergency shut down" % (self.parent.drone_id, ))
             self.parent.stop()
 
         return reply
@@ -162,15 +155,15 @@ class ControlStateMachine:
             # 4. 写入status状态
             self.parent.db_hardware["status"].insert_one({
                 "drone": ObjectId(self.parent.drone_id),
-                "task": ObjectId(control.format.ObjectId.from_array(reply._task).to_string()),
-                "coordinates": geography.epsg4326_to_epsg3857([reply.dPos[0], reply.dPos[1], reply.dPos[2]]),
-                "speed": [reply.dSpd[0], reply.dSpd[1], reply.dSpd[2]],
+                "task": ObjectId(control.format.ObjectId.from_array(reply.task).to_string()),
+                "coordinates": geography.epsg4326_to_epsg3857([reply.dPosX, reply.dPosY, reply.dPosZ]),
+                "speed": [reply.dSpdX, reply.dSpdY, reply.dSpdZ],
                 "battery": reply.ucBatteryH + reply.ucBatteryL / 256,
                 "time": reply.nTimeStamp
             })
 
             # 5. 更新task状态
-            if self.next_task is not None and ObjectId(control.format.ObjectId.from_array(reply._task).to_string()) == self.next_task["_id"]:
+            if self.next_task is not None and ObjectId(control.format.ObjectId.from_array(reply.task).to_string()) == self.next_task["_id"]:
                 self.parent.db_hardware["task"].update({
                     "_id": self.cur_task["_id"]
                 }, {
@@ -188,7 +181,7 @@ class ControlStateMachine:
                 self.state = self.next_task["type"]
                 self.cur_task = self.next_task
                 self.next_task = None
-            elif ObjectId(control.format.ObjectId.from_array(reply._task).to_string()) == self.cur_task["_id"]:
+            elif ObjectId(control.format.ObjectId.from_array(reply.task).to_string()) == self.cur_task["_id"]:
                 if self.cur_task["status"] != "ongoing":
                     self.parent.db_hardware["task"].update({
                         "_id": self.cur_task["_id"]
