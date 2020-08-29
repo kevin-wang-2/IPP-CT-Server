@@ -40,11 +40,10 @@ class Control:
                 while not get_welcomed:
                     try:
                         welcome = client.recv(1024)
-                        logger.debug(welcome)
                         get_welcomed = True
                     except socket.timeout as e:
                         client.close()
-                        logger.debug("%s:%d Time out" % (addr[0], addr[1]))
+                        logger.warning("%s:%d - Time out" % (addr[0], addr[1]))
                         break
                     except BlockingIOError as e:
                         continue
@@ -53,14 +52,13 @@ class Control:
 
                 try:
                     welcome_msg = control.format.WelcomeCmd.decode(welcome)
-                    logger.debug(
-                        "translated: %s" % (control.format.ObjectId.from_array(welcome_msg._drone).to_string()))
                 except control.format.ValidationError as e:
-                    logger.debug("Validation Error")
+                    logger.warning("%s:%d - Validation Error" % (addr[0], addr[1]))
                     client.close()
                     continue
 
                 if welcome_msg.ucType != 0xff:
+                    logger.warning("%s:%d Validation Error" % (addr[0], addr[1]))
                     client.close()
                     continue
 
@@ -69,7 +67,8 @@ class Control:
                                              control.format.ObjectId.from_array(welcome_msg._drone).to_string(), client)
                     process.start()
                 else:
-                    logger.debug("Not in drone list")
+                    logger.warning("%s:%d - %s Not in drone list" % (addr[0], addr[1],
+                                                                     control.format.ObjectId.from_array(welcome_msg._drone).to_string()))
                     client.close()
 
         return listen()
@@ -97,6 +96,7 @@ class ControlProcess(Process):
         self.open = True
 
     def stop(self):
+        logger.info("Control process for drone %s exited" % (self.drone_id,))
         self.open = False
         self.close()
 
@@ -111,7 +111,7 @@ class ControlProcess(Process):
         self.db_business = self.db_client[_config["db"]["db"]["business"]]
         self.db_business.authenticate(_config["db"]["user"], _config["db"]["pwd"])
 
-        logger.debug("Control process for drone %s started" % (self.drone_id,))
+        logger.info("Control process for drone %s started" % (self.drone_id,))
         state_machine = control.ControlStateMachine.ControlStateMachine(self)
         state_machine.run()
 

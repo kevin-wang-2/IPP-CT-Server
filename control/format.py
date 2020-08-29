@@ -100,6 +100,12 @@ def encode_double_array(arr, dimension=1):
         return result
 
 
+def decode_position_array(buffer):
+    return [
+        item for item in struct.iter_unpack(">ddd", buffer)
+        ]
+
+
 WelcomeCmd = create_structure([
     ("ucType", c_uint8),
     ("", c_uint8 * 3),
@@ -139,7 +145,7 @@ ReplyCmd = create_structure([
     ("ucBatteryH", c_uint8),
     ("ucBatteryL", c_uint8),
     ("", c_uint8 * 2),
-    ("ucTimeStamp", c_uint32),
+    ("nTimeStamp", c_uint32),
     ("nValidation", c_uint32)
 ], {
     "ucType": 0xfe
