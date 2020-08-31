@@ -59,7 +59,11 @@ class ControlStateMachine:
         解析飞机回复
         :return:
         """
-        reply = control.format.Package.read(self.parent.socket)
+        try:
+            reply = control.format.Package.read(self.parent.socket)
+        except ConnectionResetError:
+            self.reconnect()
+            return None
 
         if reply.ucType == 0xfd:  # 退出状态
             if reply.ucReason == 0x00:
