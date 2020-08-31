@@ -1,6 +1,10 @@
 import control.format
 import socket
 
+"""
+该单元测试已停用
+"""
+
 
 def run():
     # Timeout
