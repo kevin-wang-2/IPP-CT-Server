@@ -40,6 +40,13 @@ def run():
 
     cli = socket.socket()
     cli.connect(("127.0.0.1", 3000))
+
+    welcome = control.format.Package.read(cli)
+    print(
+        control.format.ObjectId.from_array(welcome.controller).to_string(),
+        welcome.ucReconnect
+    )
+
     cli.send(control.format.generate_package(control.format.PACKAGE_WELCOME_MSG,
                                              drone=control.format.ObjectId.from_number(0x5f3f217deb05450df65cda10),
                                              ucBatteryH=0x64,

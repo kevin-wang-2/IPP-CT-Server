@@ -1,7 +1,6 @@
 import pymongo
 from multiprocessing import Process
 import socket
-import threading
 import control.format
 import control.ControlStateMachine
 import logging
@@ -35,19 +34,25 @@ class Control:
                 except (socket.timeout, BlockingIOError) as e:
                     continue
 
+                client.send(control.format.generate_package(control.format.PACKAGE_WELCOME_CMD,
+                                                            controller=control.format.ObjectId.from_str(self.garage_id),
+                                                            ucReconnect=0x00))
+
                 yield
                 get_welcomed = False
                 while not get_welcomed:
                     try:
                         welcome_msg = control.format.Package.read(client)
                         get_welcomed = True
-                    except BlockingIOError as e:
+                    except (BlockingIOError, ConnectionResetError):
+                        client.close()
+                        logger.warning("%s:%d - Fail to connect" % (addr[0], addr[1]))
                         continue
-                    except socket.timeout as e:
+                    except socket.timeout:
                         client.close()
                         logger.warning("%s:%d - Time out" % (addr[0], addr[1]))
                         break
-                    except control.format.ValidationError as e:
+                    except control.format.ValidationError:
                         logger.warning("%s:%d - Validation Error" % (addr[0], addr[1]))
                         client.close()
                         break
